@@ -17,6 +17,10 @@
  * QRCode-Generator library by Kazuhiko Arase
  * https://github.com/kazuhikoarase/qrcode-generator/
  *
+ * @method string getQRText($page, $options = []) Returns the text to generate the QR code. Defaults to `httpUrl`
+ * @method array generateQRCodes(Page $page, array $sources = [], $languages = null) Generates the QR code(s)
+ * @method array generateLanguagesQRCodes($page, string $source, $languages = null, $label = "", $addTitle = false) Generates the QR code(s) in each languages
+ * 
  */
 class FieldtypeQRCode extends Fieldtype {
 
