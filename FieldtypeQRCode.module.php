@@ -279,7 +279,9 @@ class FieldtypeQRCode extends Fieldtype {
 		} else {
 			$im = $qr->createImage(4, 4);
 			imagegif($im);
-			imagedestroy($im);
+			if (PHP_MAJOR_VERSION < 8) {
+				imagedestroy($im);
+			}
 		}
 		$data = ob_get_contents();
 		ob_end_clean();
