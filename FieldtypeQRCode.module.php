@@ -63,6 +63,15 @@ class FieldtypeQRCode extends Fieldtype {
                 $event->return = "<div style=\"margin-bottom: -0.5em;\">$value</div>";
             }
         });
+
+		$input = $this->wire()->input;
+		if ($input->get->qrcode_pdf) {
+			$text = base64_decode($input->get->qrcode_pdf);
+			if ($text) {
+				$filename = $input->get->filename ? base64_decode($input->get->filename) : "qrcode";
+				$this->downloadPDF($text, $filename);
+			}
+		}
     }
 
     /**
@@ -331,6 +340,7 @@ class FieldtypeQRCode extends Fieldtype {
         $this->landingPageUrl = $field->get("landingPageUrl");
         $this->redirectParam = $field->get("redirectParam") ?: "id";
         $this->useContainerId = $field->get("useContainerId") === 1;
+		$this->showPdf = $field->get("showPdf") === 1;
         $this->containerPage = $page;
 
         if ($languages = $page->getLanguages()) {
@@ -407,6 +417,15 @@ class FieldtypeQRCode extends Fieldtype {
                 $out .= "</li>";
             }
             $out .= "</ul>";
+			if (!empty($this->showPdf)) {
+				
+				$queryString = $this->wire()->input->queryString();
+				$currentUrl = $this->wire()->input->url();
+				if($queryString) $currentUrl .= "?" . $queryString;
+//var_dump($value);die();
+				$pdfUrl = $currentUrl . (strpos($currentUrl, "?") !== false ? "&" : "?") . "qrcode_pdf=" . base64_encode($firstQR) . "&filename=" . base64_encode($value[1]["text"]);
+				$out .= "<p class=\"downloadPDF\"><a href=\"$pdfUrl\" target=\"_blank\"><i class=\"fa fa-file-pdf-o\"></i> " . $this->_("Download PDF") . "</a></p>";
+			}
             $out .= "<p class=\"contentQRCode\">";
             if (
                 strpos($firstQR, "http") === 0
@@ -453,6 +472,7 @@ class FieldtypeQRCode extends Fieldtype {
         if (is_null($field->get("landingPageUrl"))) $field->set("landingPageUrl", "");
         if (is_null($field->get("redirectParam"))) $field->set("redirectParam", "id");
         if (is_null($field->get("useContainerId"))) $field->set("useContainerId", 0);
+		if (is_null($field->get("showPdf"))) $field->set("showPdf", 0);
 
         $modules = $this->wire()->modules;
 
@@ -546,6 +566,20 @@ class FieldtypeQRCode extends Fieldtype {
         $useContainerId->showIf("landingPageUrl!=''");
         $inputfields->add($useContainerId);
 
+		/** @var InputfieldCheckbox $showPdf */
+		$showPdf = $modules->get("InputfieldCheckbox");
+		$showPdf->attr("name", "showPdf");
+		$showPdf->columnWidth = 100;
+		$showPdf->description = $this->_("If checked, a PDF download link will be displayed below the QR code.");
+		$showPdf->icon = "file-pdf-o";
+		$showPdf->label = $this->_("Show PDF Download Link?");
+		$showPdf->label2 = $this->_("Yes");
+		$showPdf->value = $field->get("showPdf");
+		if ($field->get("showPdf") === 1) {
+			$showPdf->checked(true);
+		}
+		$inputfields->add($showPdf);
+
         /** @var InputfieldText $text */
         $markup = $modules->get("InputfieldMarkup");
         $markup->description = $this->_("Depending on the level of correction set and the type of characters encoded in the QR code, [the maximum size allowed for a QR code can vary](https://en.wikipedia.org/wiki/QR_code#Information_capacity). It is adviced to set a maximum character count on textareas or any relevant Inputfields");
@@ -569,7 +603,7 @@ class FieldtypeQRCode extends Fieldtype {
     }
 
     public function ___getConfigAllowContext(Field $field) {
-		$fields = ["format", "markup", "source", "recovery", "landingPageUrl", "redirectParam", "useContainerId"];
+		$fields = ["format", "markup", "source", "recovery", "landingPageUrl", "redirectParam", "useContainerId", "showPdf"];
         return array_merge(parent::___getConfigAllowContext($field), $fields);
     }
 
@@ -616,6 +650,67 @@ class FieldtypeQRCode extends Fieldtype {
     public function getLoadQueryAutojoin(Field $field, DatabaseQuerySelect $query) {
         return null;
     }
+
+	public function downloadPDF($text, $filename = "qrcode") {
+		$recoveryLevel = $this->recoveryLevel;
+		switch ($recoveryLevel) {
+			case "L": $recoveryLevel = 1; break;
+			case "M": $recoveryLevel = 0; break;
+			case "Q": $recoveryLevel = 3; break;
+			case "H": $recoveryLevel = 2; break;
+		}
+		$qr = FieldtypeQRCode\QRCode::getMinimumQRCode($text, $recoveryLevel);
+
+		// Sanitize filename
+		$filename = $this->wire()->sanitizer->filename($filename);
+		if (!$filename) $filename = "qrcode";
+
+		header("Content-Type: application/pdf");
+		header("Content-Disposition: attachment; filename=\"$filename.pdf\"");
+		
+		// Generate the QR code as a series of rectangles in PDF (vector format)
+		$modules = $qr->getModuleCount();
+		$size = 180;
+		$mSize = $size / $modules;
+		$pdfStream = "q\n";
+		$pdfStream .= "0 g\n"; // Fill color black
+		for ($row = 0; $row < $modules; $row++) {
+			for ($col = 0; $col < $modules; $col++) {
+				if ($qr->isDark($row, $col)) {
+					$x = 10 + ($col * $mSize);
+					$y = 10 + (($modules - 1 - $row) * $mSize);
+					$pdfStream .= sprintf("%.2f %.2f %.2f %.2f re f\n", $x, $y, $mSize, $mSize);
+				}
+			}
+		}
+		$pdfStream .= "Q";
+		
+		$out = "%PDF-1.4\n";
+		$o = [];
+		$o[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+		$o[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+		$o[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>";
+		$o[4] = "<< /Length " . strlen($pdfStream) . " >>\nstream\n" . $pdfStream . "\nendstream";
+		
+		$offsets = [];
+		$currentOffset = strlen($out);
+		for ($i = 1; $i <= 4; $i++) {
+			$offsets[$i] = $currentOffset;
+			$obj = "$i 0 obj\n" . $o[$i] . "\nendobj\n";
+			$out .= $obj;
+			$currentOffset += strlen($obj);
+		}
+		
+		$xrefOffset = strlen($out);
+		$out .= "xref\n0 5\n0000000000 65535 f \n";
+		for ($i = 1; $i <= 4; $i++) {
+			$out .= sprintf("%010d 00000 n \n", $offsets[$i]);
+		}
+		$out .= "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n$xrefOffset\n%%EOF";
+		
+		echo $out;
+		exit;
+	}
 
     public function sanitizeValue(Page $page, Field $field, $value) {
         return $value;
